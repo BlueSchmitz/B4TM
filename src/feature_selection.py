@@ -9,11 +9,14 @@
 # Import necessary libraries
 import numpy as np
 import pandas as pd
-from scipy.stats import ttest_ind
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from scipy.stats import chi2_contingency
 from statsmodels.stats.multitest import multipletests
 
 # 1. Perform pairwise t-tests between subtypes for each feature (one vs. all)
-def ttest_feature_selection(data, k, results_dir='../results', fold_num = 0):
+def ttest_feature_selection(data, k, results_dir='../results/feature_selection', fold_num = 0):
 # the fold number is used in the file names so the files do not get overwritten! Pass it to the function!
     '''
     Feature selection based on t-tests between subtypes (one vs rest). Top k features are selected.
@@ -38,9 +41,13 @@ def ttest_feature_selection(data, k, results_dir='../results', fold_num = 0):
         # Perform t-test for each feature
         p_values = []
         for feature in feature_cols:
-            t_stat, p_val = ttest_ind(group1[feature], group2[feature], equal_var=False)
+            contingency_table = pd.crosstab(data[feature], data['Subgroup'] == i)
+            try:
+                chi2, p_val, _, _ = chi2_contingency(contingency_table)
+            except ValueError:
+                p_val = 1.0  # fallback if table can't be used (e.g., constant value)
             p_values.append(p_val)
-        
+
         p_values = np.array(p_values)
         # Apply FDR correction
         _, pvals_fdr, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
@@ -52,7 +59,7 @@ def ttest_feature_selection(data, k, results_dir='../results', fold_num = 0):
 
         # Save to CSV
         selected_df = pd.DataFrame({'Feature': top_features, 'p-value': top_pvals})
-        selected_df.to_csv(f"{results_dir}/selected_features_{i.replace(' ', '_')}_fold_{fold_num}.csv", index=False)
+        selected_df.to_csv(os.path.join(results_dir, f"selected_features_{i.replace(' ', '_')}_fold_{fold_num}.csv"), index=False)
 
         # Keep track of selected features and their p-values
         all_features_selected.extend(top_features)
@@ -63,16 +70,16 @@ def ttest_feature_selection(data, k, results_dir='../results', fold_num = 0):
         'Feature': all_features_selected,
         'p-value': all_pvalues_selected
     })
-    selected_df.to_csv(f"{results_dir}/selected_features_with_pvalues_fold_{fold_num}.csv", index=False)
+    selected_df.to_csv(os.path.join(results_dir, f"selected_features_with_pvalues_fold_{fold_num}.csv"), index=False)
 
     # Combine features of all subtypes, remove duplicates and add values back to the dataframe
     unique_features = list(set(all_features_selected)) # remove duplicates
     selected_data = data[['Sample', 'Subgroup'] + unique_features]
-    selected_data.to_csv(f"{results_dir}/selected_data_fold_{fold_num}.csv", index=False)
+    selected_data.to_csv(os.path.join(results_dir, f"selected_data_fold_{fold_num}.csv"), index=False)
 
     return selected_data, selected_df
 
-def remove_highly_correlated_features(selected_data, selected_df, l, results_dir='../results', fold_num = 0): # l is the correlation threshold that is treated as a hyperparameter 
+def remove_highly_correlated_features(selected_data, selected_df, l, results_dir='../results/feature_selection', fold_num = 0): # l is the correlation threshold that is treated as a hyperparameter 
     '''
     Remove highly correlated features based on spearman's correlation and a correlation threshold.
     Input:
@@ -114,10 +121,10 @@ def remove_highly_correlated_features(selected_data, selected_df, l, results_dir
     
     # Save the dropped features and correlation
     drop_df = pd.DataFrame(drop_log, columns=['Feature_to_drop', 'Retained_feature', 'Correlation', 'p_to_drop', 'p_retained'])
-    drop_df.to_csv(f"{results_dir}/correlated_features_dropped_fold_{fold_num}.csv", index=False)
+    drop_df.to_csv(os.path.join(results_dir, f"correlated_features_dropped_fold_{fold_num}.csv"), index=False)
     
     # Drop features from selected features 
     data_cleaned = selected_data.drop(columns=list(features_to_drop))
-    data_cleaned.to_csv(f"{results_dir}/selected_data_cleaned_fold_{fold_num}.csv", index=False)
+    data_cleaned.to_csv(os.path.join(results_dir, f"selected_data_cleaned_fold_{fold_num}.csv"), index=False)
 
     return data_cleaned
