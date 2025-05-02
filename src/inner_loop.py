@@ -2,7 +2,7 @@
 # 1. Run 5-fold stratified CV on the data
 # 2. For each fold, split the data into training and validation sets
 # 3. Define hyperparameter to test during grid search
-# 4. Based on the model selection (t_test/regularization/baseline), perform feature selection and hyperparameter tuning on the training set
+# 4. Based on the model selection (stat_test/regularization/baseline), perform feature selection and hyperparameter tuning on the training set
 # 5. Evaluate the model on the validation set and record the results
 # 6. Save the results to a CSV file
 # 7. Return the best hyperparameters and feature selection parameters to the main function
@@ -16,7 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import pandas as pd
 from sklearn.metrics import make_scorer, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
 from sklearn.model_selection import StratifiedKFold, ParameterGrid
-from src.feature_selection import ttest_feature_selection, remove_highly_correlated_features
+from src.feature_selection import stat_test_feature_selection, remove_highly_correlated_features, nonlinear_feature_selection, linear_feature_selection
 from sklearn.ensemble import RandomForestClassifier
 
 def inner_loop(data, model_selection, results_dir = '../results/inner_results', outer_fold = 0):
@@ -29,17 +29,17 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
         fold_num: CV outer fold number for saving results (to avoid overwriting files)
     Output:
         best_params: Dictionary of best hyperparameters for the chosen model
-        feature_selection_params: Dictionary of feature selection parameters
     '''
     # Parametergrid
     param_grid = {
         # RF hyperparameters
-        'n_estimators': [50, 100, 200],
-        'max_depth': [None, 10, 20],
-        'max_features': [5, 10, 20],
+        'n_estimators': [50, 100],
+        'max_depth': [None, 10],
+        'max_features': ['sqrt'], 
         # feature selection parameters
-        'k': [50, 100, 200] if model_selection == 't_test' or model_selection == 'regularization' else [None], # top k features
-        'l': [0.7, 0.8, 0.9] if model_selection == 't_test' else [None] # correlation threshold 
+        'k': [50, 100, 200] if model_selection in ['stat_test', 'linear_regularization', 'nonlinear_regularization'] else [None], # top k features
+        'l': [0.7, 0.8, 0.9] if model_selection in ['stat_test', 'linear_regularization', 'nonlinear_regularization'] else [None], # correlation threshold 
+        'alpha': [0.1, 1, 10] if model_selection in ['linear_regularization', 'nonlinear_regularization'] else [None] # regularization parameter for Lasso
     }
 
     # data
@@ -70,9 +70,9 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
             print(f"Inner fold {inner_fold}...")
 
             # 1. Feature Selection
-            if model_selection == 't_test':
-                selected_train, selected_df = ttest_feature_selection(
-                    train_data, 
+            if model_selection == 'stat_test':
+                selected_train, selected_df = stat_test_feature_selection(
+                    data=train_data, 
                     k=params['k'], 
                     results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
                     fold_num=f"{outer_fold}_{param_num}_{inner_fold}"
@@ -80,8 +80,9 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
                 print("Feature selection done.")
 
                 train_cleaned = remove_highly_correlated_features(
-                    selected_train, 
-                    selected_df, 
+                    selected_train=selected_train, 
+                    selected_df=selected_df, 
+                    model_selection=model_selection,
                     l=params['l'], 
                     results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
                     fold_num=f"{outer_fold}_{param_num}_{inner_fold}"
@@ -93,8 +94,48 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
                 train_cleaned = train_data.copy()
                 print("Using all features without selection.")
             
+            elif model_selection == 'nonlinear_regularization':
+                selected_train, selected_df = nonlinear_feature_selection(
+                    data=train_data, 
+                    k=params['k'], 
+                    results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
+                    fold_num=f"{outer_fold}_{param_num}_{inner_fold}",
+                    alpha=params['alpha']
+                )
+                print("Feature selection done.")
+                
+                train_cleaned = remove_highly_correlated_features(
+                    selected_train=selected_train, 
+                    selected_df=selected_df,
+                    model_selection=model_selection, 
+                    l=params['l'], 
+                    results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
+                    fold_num=f"{outer_fold}_{param_num}_{inner_fold}"
+                )
+                print("Removed highly correlated features.")
+
+            elif model_selection == 'linear_regularization':
+                selected_train, selected_df = linear_feature_selection(
+                    data=train_data, 
+                    k=params['k'], 
+                    results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
+                    fold_num=f"{outer_fold}_{param_num}_{inner_fold}",
+                    alpha=params['alpha']
+                )
+                print("Feature selection done.")
+
+                train_cleaned = remove_highly_correlated_features(
+                    selected_train=selected_train, 
+                    selected_df=selected_df, 
+                    model_selection=model_selection,
+                    l=params['l'], 
+                    results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
+                    fold_num=f"{outer_fold}_{param_num}_{inner_fold}"
+                )
+                print("Removed highly correlated features.")
+
             else:
-                print("Invalid model selection. Choose 't_test', 'regularization', or 'baseline'.")
+                print("Invalid model selection. Choose 'stat_test', 'linear_regularization', 'nonlinear_regularization' or 'baseline'.")
                 continue 
 
             # 2. Match features in val set

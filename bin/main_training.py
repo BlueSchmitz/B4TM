@@ -7,16 +7,19 @@
 
 # Import necessary libraries
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import StratifiedKFold
 import argparse
 import sys
 import os
+import seaborn as sns
+import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import make_scorer, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve
 from joblib import dump
 from src.inner_loop import inner_loop
-from src.feature_selection import ttest_feature_selection, remove_highly_correlated_features
+from src.feature_selection import stat_test_feature_selection, remove_highly_correlated_features, nonlinear_feature_selection, linear_feature_selection
 
 skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
@@ -52,23 +55,67 @@ def outer_loop(data_path, model_selection, results_dir, n_outer_folds=5):
         best_params = inner_loop(train_val_data, model_selection, results_dir=results_dir, outer_fold=outer_fold)
 
         # perform feature selection based on best hyperparameters 
-        if model_selection == 't_test':
-            selected_train, _ = ttest_feature_selection(
-                train_val_data, 
+        if model_selection == 'stat_test':
+            selected_train, selected_df = stat_test_feature_selection(
+                data=train_val_data, 
                 k=best_params['k'], 
                 results_dir=results_dir, 
                 fold_num=outer_fold
             )
             # Remove highly correlated features if specified
             if best_params['l'] is not None:
-                data_cleaned = remove_highly_correlated_features(selected_train, l=best_params['l'])
+                data_cleaned = remove_highly_correlated_features(
+                    selected_train=selected_train,
+                    selected_df=selected_df,
+                    model_selection=model_selection,
+                    l=best_params['l'],
+                    results_dir=results_dir,
+                    fold_num=outer_fold
+                )
             else:
                 data_cleaned = selected_train.copy()
 
-        elif model_selection == 'regularization':
-            # Implement regularization feature selection here (if needed)
-            pass
+        elif model_selection == 'nonlinear_regularization':
+            selected_train, selected_df = nonlinear_feature_selection(
+                data=train_val_data, 
+                k=best_params['k'], 
+                results_dir=results_dir, 
+                fold_num=outer_fold,
+                alpha=best_params['alpha']
+            )
+            # Remove highly correlated features if specified
+            if best_params['l'] is not None:
+                data_cleaned = remove_highly_correlated_features(
+                    selected_train=selected_train,
+                    selected_df=selected_df,
+                    model_selection=model_selection,
+                    l=best_params['l'],
+                    results_dir=results_dir,
+                    fold_num=outer_fold
+                )
+            else:
+                data_cleaned = selected_train.copy()
 
+        elif model_selection == 'linear_regularization':
+            selected_train, selected_df = linear_feature_selection(
+                data=train_val_data, 
+                k=best_params['k'], 
+                results_dir=results_dir, 
+                fold_num=outer_fold,
+                alpha=best_params['alpha']
+            )
+            # Remove highly correlated features if specified
+            if best_params['l'] is not None:
+                data_cleaned = remove_highly_correlated_features(
+                    selected_train=selected_train,
+                    selected_df=selected_df,
+                    model_selection=model_selection,
+                    l=best_params['l'],
+                    results_dir=results_dir,
+                    fold_num=outer_fold
+                )
+            else:
+                data_cleaned = selected_train.copy()
         elif model_selection == 'baseline':
             # Use all features without selection
             data_cleaned = train_val_data.copy()
@@ -94,6 +141,7 @@ def outer_loop(data_path, model_selection, results_dir, n_outer_folds=5):
         trainval_probs = model.predict_proba(X_trainval)
 
         # Save model
+        os.makedirs(os.path.join(results_dir, model_selection, 'models'), exist_ok=True)
         model_path = os.path.join(results_dir, model_selection, f"models/rf_model_fold{outer_fold}.joblib")
         dump(model, model_path)
         print(f"Saved model to {model_path}")
@@ -113,6 +161,21 @@ def outer_loop(data_path, model_selection, results_dir, n_outer_folds=5):
                 'train_f1_weighted': f1_score(y_trainval, trainval_preds, average='weighted'),
                 'train_roc_auc_ovr': roc_auc_score(y_trainval, trainval_probs, multi_class='ovr', average='weighted')
             })
+        
+        # Save confusion matrix for each outer fold
+        conf_matrix = confusion_matrix(y_test, test_preds)
+        # Plot conf
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', xticklabels=np.unique(y), yticklabels=np.unique(y))
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        plt.title(f'Confusion Matrix for Outer Fold {outer_fold}')
+        # Save conf as png
+        conf_matrix_image_path = os.path.join(results_dir, model_selection, f"outer_results/confusion_matrix_fold{outer_fold}.png")
+        plt.savefig(conf_matrix_image_path)
+        plt.close()
+        print(f"Saved confusion matrix for fold {outer_fold} as an image at {conf_matrix_image_path}")
+
     outer_results_df = pd.DataFrame(outer_results)
     outer_results_df.to_csv(os.path.join(results_dir, model_selection, "outer_results", "outer_results.csv"), index=False)
 
@@ -121,7 +184,7 @@ def outer_loop(data_path, model_selection, results_dir, n_outer_folds=5):
 def main():
     parser = argparse.ArgumentParser(description="Run outer cross-validation loop for model training")
     parser.add_argument("-i", "--input", required=True, help="Path to input data file (CSV)")
-    parser.add_argument("-m", "--model", required=True, choices=['t_test', 'regularization', 'baseline'], help="Model selection method")
+    parser.add_argument("-m", "--model", required=True, choices=['stat_test', 'linear_regularization' ,'nonlinear_regularization', 'baseline'], help="Model selection method")
     parser.add_argument("-r", "--results", required=True, help="Path to directory where results should be saved")
     parser.add_argument("-f", "--folds", required=False, help="Number of outer loop folds", type=int, default=5)
     # Parse options

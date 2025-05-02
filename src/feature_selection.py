@@ -1,5 +1,5 @@
 ### Plan ###
-# 1. Perform pairwise t-tests between subtypes for each feature (one vs. all)
+# 1. Perform Kruskal-Wallis H-test across all subtypes.
     # Bootstrapping, Bonfferroni correction!!
 # 2. Sort list by p-value
 # 3. Select top k features for each subtype
@@ -12,17 +12,22 @@ import pandas as pd
 import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from scipy.stats import chi2_contingency
+from scipy.stats import kruskal
 from statsmodels.stats.multitest import multipletests
+from xgboost import XGBClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import LogisticRegression
 
-# 1. Perform pairwise t-tests between subtypes for each feature (one vs. all)
-def ttest_feature_selection(data, k, results_dir='../results/feature_selection', fold_num = 0):
+# 1. Perform pairwise Kruskal-Wallis between subtypes for each feature
+def stat_test_feature_selection(data, k, results_dir='../results/feature_selection', fold_num = 0):
 # the fold number is used in the file names so the files do not get overwritten! Pass it to the function!
     '''
-    Feature selection based on t-tests between subtypes (one vs rest). Top k features are selected.
+    Feature selection using Kruskal-Wallis H-test across all subtypes.
+    Top k features with lowest FDR-adjusted p-values are selected.
+
     Input:
         data: DataFrame containing the CNV data with 'Sample' and 'Subgroup' columns
-        k: Number of top features to select for each subtype
+        k: Number of top features to select
         results_dir: Directory to save the results
         fold_num: CV fold number for saving results (to avoid overwriting files)
     Output:
@@ -31,59 +36,155 @@ def ttest_feature_selection(data, k, results_dir='../results/feature_selection',
     '''
     # Prepare data and assign groups 
     subgroups = ['HER2+', 'HR+', 'Triple Neg']
-    all_features_selected = []
-    all_pvalues_selected = []
     feature_cols = data.columns[1:-1] # exclude 'Sample' and 'Subgroup' columns
-    # loop through each subgroup
-    for i in subgroups:
-        group1 = data[data['Subgroup'] == i]
-        group2 = data[data['Subgroup'] != i]
-        # Perform t-test for each feature
-        p_values = []
-        for feature in feature_cols:
-            contingency_table = pd.crosstab(data[feature], data['Subgroup'] == i)
-            try:
-                chi2, p_val, _, _ = chi2_contingency(contingency_table)
-            except ValueError:
-                p_val = 1.0  # fallback if table can't be used (e.g., constant value)
-            p_values.append(p_val)
+    # Perform stat test for each feature
+    p_values = []
+    for feature in feature_cols:
+        try:
+            group_values = [data[data['Subgroup'] == group][feature].values for group in subgroups]
+            stat, p_val = kruskal(*group_values)
+        except ValueError:
+            p_val = 1.0  # fallback in case of constant values or insufficient variance
+        p_values.append(p_val)
 
-        p_values = np.array(p_values)
-        # Apply FDR correction
-        _, pvals_fdr, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    p_values = np.array(p_values)
+    # Apply FDR correction
+    _, pvals_fdr, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
         
-        # Sort by p-value and select top k features 
-        sorted_indices = np.argsort(pvals_fdr)
-        top_features = feature_cols[sorted_indices][:k]
-        top_pvals = pvals_fdr[sorted_indices][:k]
+    # Sort by p-value and select top k features 
+    sorted_indices = np.argsort(pvals_fdr)
+    top_features = feature_cols[sorted_indices][:k]
+    top_pvals = pvals_fdr[sorted_indices][:k]
 
-        # Save to CSV
-        selected_df = pd.DataFrame({'Feature': top_features, 'p-value': top_pvals})
-        selected_df.to_csv(os.path.join(results_dir, f"selected_features_{i.replace(' ', '_')}_fold_{fold_num}.csv"), index=False)
+    # Save to CSV
+    selected_df = pd.DataFrame({'Feature': top_features, 'p-value': top_pvals})
+    selected_df.to_csv(os.path.join(results_dir, f"selected_features_fold_{fold_num}.csv"), index=False)
 
-        # Keep track of selected features and their p-values
-        all_features_selected.extend(top_features)
-        all_pvalues_selected.extend(top_pvals)
-
-    # Create a dataframe for the combined selected features and their p-values and save to CSV
-    selected_df = pd.DataFrame({
-        'Feature': all_features_selected,
-        'p-value': all_pvalues_selected
-    })
-    selected_df.to_csv(os.path.join(results_dir, f"selected_features_with_pvalues_fold_{fold_num}.csv"), index=False)
-
-    # Combine features of all subtypes, remove duplicates and add values back to the dataframe
-    unique_features = list(set(all_features_selected)) # remove duplicates
-    selected_data = data[['Sample', 'Subgroup'] + unique_features]
+    # Dataframe to return to inner loop
+    selected_data = data[['Sample', 'Subgroup'] + list(top_features)]
     selected_data.to_csv(os.path.join(results_dir, f"selected_data_fold_{fold_num}.csv"), index=False)
 
     return selected_data, selected_df
 
-def remove_highly_correlated_features(selected_data, selected_df, l, results_dir='../results/feature_selection', fold_num = 0): # l is the correlation threshold that is treated as a hyperparameter 
+def nonlinear_feature_selection(data, k, alpha, results_dir='../results/feature_selection', fold_num = 0):
+# the fold number is used in the file names so the files do not get overwritten! Pass it to the function!
+    '''
+    Feature selection using XGBoost feature importance (nonlinear).
+    Top k features are selected.
+
+    Input:
+        data: DataFrame containing the CNV data with 'Sample' and 'Subgroup' columns
+        k: Number of top features to select
+        results_dir: Directory to save the results
+        fold_num: CV fold number for saving results (to avoid overwriting files)
+    Output:
+        selected_data: DataFrame with selected features and their CNV values
+        top_features: DataFrame with selected features and their p-values
+    '''
+        # Extract features and labels
+    X = data.iloc[:, 1:-1]  # exclude 'Sample' and 'Subgroup'
+    y = data['Subgroup']
+
+    # Encode target labels to integers
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+
+    # Train XGBoost classifier
+    model = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=42, alpha=alpha)
+    model.fit(X, y_encoded)
+
+    # Get feature importances
+    importances = model.feature_importances_
+    feature_names = X.columns
+    importance_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Importance': importances
+    })
+
+    # Sort and select top k
+    importance_df = importance_df.sort_values(by='Importance', ascending=False)
+    top_features = importance_df.head(k)
+
+    # Save selected features
+    top_features.to_csv(os.path.join(results_dir, f"xgb_selected_features_fold_{fold_num}.csv"), index=False)
+
+    # Subset original data to include selected features
+    selected_data = data[['Sample', 'Subgroup'] + list(top_features['Feature'])]
+    selected_data.to_csv(os.path.join(results_dir, f"xgb_selected_data_fold_{fold_num}.csv"), index=False)
+
+    return selected_data, top_features
+
+def linear_feature_selection(data, k, alpha, results_dir='../results/feature_selection', fold_num = 0):
+# the fold number is used in the file names so the files do not get overwritten! Pass it to the function!
+    '''
+    Feature selection using logistic regression feature importance (linear) with L1 regularization.
+    Top k features are selected.
+
+    Input:
+        data: DataFrame containing the CNV data with 'Sample' and 'Subgroup' columns
+        k/3: Number of top features to select for each subtype
+        results_dir: Directory to save the results
+        fold_num: CV fold number for saving results (to avoid overwriting files)
+        alpha: Regularization strength for L1 penalty
+    Output:
+        selected_data: DataFrame with selected features and their CNV values
+        importance_df: DataFrame with selected features and their p-values
+    '''
+    X = data.iloc[:, 1:-1]  # Exclude 'Sample' and 'Subgroup'
+    y = data['Subgroup']
+
+    # Encode labels
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+    class_labels = le.classes_
+
+    # Fit L1 logistic regression
+    model = LogisticRegression(
+        penalty='l1',
+        solver='saga',
+        multi_class='multinomial',
+        max_iter=10000,
+        C=1/alpha,
+        random_state=42
+    )
+    model.fit(X, y_encoded)
+
+    feature_names = np.array(X.columns)
+    coef_matrix = np.abs(model.coef_)  # shape: (n_classes, n_features)
+
+    # Select top k/3 features per class
+    k_per_class = max(1, k // len(class_labels))
+    selected_features = set()
+    importance_records = []
+
+    for class_idx, class_name in enumerate(class_labels):
+        coefs = coef_matrix[class_idx]
+        top_indices = np.argsort(coefs)[-k_per_class:]
+        for idx in top_indices:
+            feature = feature_names[idx]
+            selected_features.add(feature)
+            importance_records.append({
+                'Class': class_name,
+                'Feature': feature,
+                'Importance': coefs[idx]
+            })
+
+    # Create result dataframe
+    importance_df = pd.DataFrame(importance_records).drop_duplicates(subset='Feature')
+    importance_df.to_csv(os.path.join(results_dir, f"logreg_selected_features_fold_{fold_num}.csv"), index=False)
+
+    # Create final selected dataset
+    selected_features = list(importance_df['Feature'].unique())
+    selected_data = data[['Sample', 'Subgroup'] + selected_features]
+    selected_data.to_csv(os.path.join(results_dir, f"logreg_selected_data_fold_{fold_num}.csv"), index=False)
+
+    return selected_data, importance_df
+
+def remove_highly_correlated_features(selected_data, selected_df, model_selection, l, results_dir='../results/feature_selection', fold_num = 0): # l is the correlation threshold that is treated as a hyperparameter 
     '''
     Remove highly correlated features based on spearman's correlation and a correlation threshold.
     Input:
-        selected_data: DataFrame containing the selected features (t-test) with their CNV data and 'Sample' and 'Subgroup' columns
+        selected_data: DataFrame containing the selected features (stat test) with their CNV data and 'Sample' and 'Subgroup' columns
         selected_df: DataFrame containing the selected features and their p-values
         l: Correlation threshold for removing highly correlated features
     Output:
@@ -104,23 +205,42 @@ def remove_highly_correlated_features(selected_data, selected_df, l, results_dir
                 # Get feature names
                 f1 = corr_matrix.index[i]
                 f2 = corr_matrix.columns[j]
-                # Get p-values from selected_df
-                p1_val = selected_df[selected_df['Feature'] == f1]['p-value'].values
-                p2_val = selected_df[selected_df['Feature'] == f2]['p-value'].values
-                if len(p1_val) == 0 or len(p2_val) == 0:
-                    continue  # skip if p-value missing for any feature
-                p1 = p1_val[0]
-                p2 = p2_val[0]
-                # Drop the one with higher p-value
-                if p1 > p2:
-                    features_to_drop.add(f1)
-                    drop_log.append((f1, f2, corr_val, p1, p2))
-                else:
-                    features_to_drop.add(f2)
-                    drop_log.append((f2, f1, corr_val, p2, p1))
-    
+                if model_selection == 'stat_test':
+                    # Get p-values from selected_df
+                    p1_val = selected_df[selected_df['Feature'] == f1]['p-value'].values
+                    p2_val = selected_df[selected_df['Feature'] == f2]['p-value'].values
+                    if len(p1_val) == 0 or len(p2_val) == 0:
+                        continue  # skip if p-value missing for any feature
+                    p1 = p1_val[0]
+                    p2 = p2_val[0]
+                    # Drop the one with higher p-value
+                    if p1 > p2:
+                        features_to_drop.add(f1)
+                        drop_log.append((f1, f2, corr_val, p1, p2))
+                    else:
+                        features_to_drop.add(f2)
+                        drop_log.append((f2, f1, corr_val, p2, p1))
+                elif model_selection in ['linear_regularization', 'nonlinear_regularization']:
+                    # Get coefficients from selected_df
+                    c1_val = selected_df[selected_df['Feature'] == f1]['Importance'].values
+                    c2_val = selected_df[selected_df['Feature'] == f2]['Importance'].values
+                    if len(c1_val) == 0 or len(c2_val) == 0:
+                        continue  # skip if coefficients missing for any feature
+                    c1 = abs(c1_val[0])
+                    c2 = abs(c2_val[0])
+                    # Drop the one with higher p-value
+                    if c1 < c2:
+                        features_to_drop.add(f1)
+                        drop_log.append((f1, f2, corr_val, c1, c2))
+                    else:
+                        features_to_drop.add(f2)
+                        drop_log.append((f2, f1, corr_val, c2, c1))
+
     # Save the dropped features and correlation
-    drop_df = pd.DataFrame(drop_log, columns=['Feature_to_drop', 'Retained_feature', 'Correlation', 'p_to_drop', 'p_retained'])
+    if model_selection == 'stat_test':
+        drop_df = pd.DataFrame(drop_log, columns=['Feature_to_drop', 'Retained_feature', 'Correlation', 'p_to_drop', 'p_retained'])
+    elif model_selection in ['linear_regularization', 'nonlinear_regularization']:
+        drop_df = pd.DataFrame(drop_log, columns=['Feature_to_drop', 'Retained_feature', 'Correlation', 'c_to_drop', 'c_retained'])
     drop_df.to_csv(os.path.join(results_dir, f"correlated_features_dropped_fold_{fold_num}.csv"), index=False)
     
     # Drop features from selected features 
