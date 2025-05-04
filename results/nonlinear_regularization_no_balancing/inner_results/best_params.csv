@@ -1,0 +1,6 @@
+fold,n_estimators,max_depth,max_features,k,l,alpha,accuracy
+1_1_5,50,,sqrt,,,0.1,0.8
+2_5_5,50,,sqrt,,,1,0.8
+3_2_5,100,,sqrt,,,0.1,0.8
+4_6_5,100,,sqrt,,,1,0.825
+5_1_5,50,,sqrt,,,0.1,0.7875

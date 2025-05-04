@@ -37,8 +37,8 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
         'max_depth': [None, 10],
         'max_features': ['sqrt'], 
         # feature selection parameters
-        'k': [50, 100, 200] if model_selection in ['stat_test', 'linear_regularization', 'nonlinear_regularization'] else [None], # top k features
-        'l': [0.7, 0.8, 0.9] if model_selection in ['stat_test', 'linear_regularization', 'nonlinear_regularization'] else [None], # correlation threshold 
+        'k': [100, 200, 300] if model_selection == 'stat_test' else [None], # top k features
+        'l': [0.7, 0.8, 0.9] if model_selection == 'stat_test' else [None], # correlation threshold 
         'alpha': [0.1, 1, 10] if model_selection in ['linear_regularization', 'nonlinear_regularization'] else [None] # regularization parameter for Lasso
     }
 
@@ -80,7 +80,7 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
                 print("Feature selection done.")
 
                 train_cleaned = remove_highly_correlated_features(
-                    selected_train=selected_train, 
+                    selected_data=selected_train, 
                     selected_df=selected_df, 
                     model_selection=model_selection,
                     l=params['l'], 
@@ -97,42 +97,22 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
             elif model_selection == 'nonlinear_regularization':
                 selected_train, selected_df = nonlinear_feature_selection(
                     data=train_data, 
-                    k=params['k'], 
                     results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
                     fold_num=f"{outer_fold}_{param_num}_{inner_fold}",
                     alpha=params['alpha']
                 )
+                train_cleaned = selected_train.copy()
                 print("Feature selection done.")
-                
-                train_cleaned = remove_highly_correlated_features(
-                    selected_train=selected_train, 
-                    selected_df=selected_df,
-                    model_selection=model_selection, 
-                    l=params['l'], 
-                    results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
-                    fold_num=f"{outer_fold}_{param_num}_{inner_fold}"
-                )
-                print("Removed highly correlated features.")
 
             elif model_selection == 'linear_regularization':
                 selected_train, selected_df = linear_feature_selection(
                     data=train_data, 
-                    k=params['k'], 
                     results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
                     fold_num=f"{outer_fold}_{param_num}_{inner_fold}",
                     alpha=params['alpha']
                 )
+                train_cleaned = selected_train.copy()
                 print("Feature selection done.")
-
-                train_cleaned = remove_highly_correlated_features(
-                    selected_train=selected_train, 
-                    selected_df=selected_df, 
-                    model_selection=model_selection,
-                    l=params['l'], 
-                    results_dir=os.path.join(results_dir, model_selection, "feature_selection"), 
-                    fold_num=f"{outer_fold}_{param_num}_{inner_fold}"
-                )
-                print("Removed highly correlated features.")
 
             else:
                 print("Invalid model selection. Choose 'stat_test', 'linear_regularization', 'nonlinear_regularization' or 'baseline'.")
@@ -181,20 +161,31 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
         if avg_score > best_avg_score:
             best_avg_score = avg_score
             best_params = {
+                'fold': f"{outer_fold}_{param_num}_{inner_fold}",
                 'n_estimators': params['n_estimators'],
                 'max_depth': params['max_depth'],
                 'max_features': params['max_features'],
                 'k': params['k'],
-                'l': params['l']
+                'l': params['l'],
+                'alpha': params['alpha'],
+                'accuracy': avg_score
             }
 
     results_df = pd.DataFrame(all_results)
-    results_df.to_csv(os.path.join(results_dir, model_selection, "inner_results", "inner_results.csv"), index=False)
-    print(f"Saved inner results to {os.path.join(results_dir, model_selection, 'inner_results', 'inner_results.csv')}")
-    best_params_df = pd.DataFrame([best_params])
-    best_params_df.to_csv(os.path.join(results_dir, model_selection, "inner_results", "best_params.csv"), index=False)
-    print(f"Saved best parameters to {os.path.join(results_dir, model_selection, 'inner_results', 'best_params.csv')}")
+    inner_results_path = os.path.join(results_dir, model_selection, "inner_results", "inner_results.csv")
+    if os.path.exists(inner_results_path):
+        results_df.to_csv(inner_results_path, mode='a', index=False, header=False)
+    else:
+        results_df.to_csv(inner_results_path, index=False)
+    print(f"Saved inner results to {inner_results_path}")
 
+    best_params_df = pd.DataFrame([best_params])
+    best_params_path = os.path.join(results_dir, model_selection, "inner_results", "best_params.csv")
+    if os.path.exists(best_params_path):
+        best_params_df.to_csv(best_params_path, mode='a', index=False, header=False)
+    else:
+        best_params_df.to_csv(best_params_path, index=False)
+    print(f"Saved best parameters to {best_params_path}")
     return best_params
 
 

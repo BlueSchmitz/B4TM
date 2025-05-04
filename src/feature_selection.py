@@ -66,11 +66,11 @@ def stat_test_feature_selection(data, k, results_dir='../results/feature_selecti
 
     return selected_data, selected_df
 
-def nonlinear_feature_selection(data, k, alpha, results_dir='../results/feature_selection', fold_num = 0):
+def nonlinear_feature_selection(data, alpha, results_dir='../results/feature_selection', fold_num = 0):
 # the fold number is used in the file names so the files do not get overwritten! Pass it to the function!
     '''
     Feature selection using XGBoost feature importance (nonlinear).
-    Top k features are selected.
+    Selects features with non-zero coefficients.
 
     Input:
         data: DataFrame containing the CNV data with 'Sample' and 'Subgroup' columns
@@ -82,7 +82,8 @@ def nonlinear_feature_selection(data, k, alpha, results_dir='../results/feature_
         top_features: DataFrame with selected features and their p-values
     '''
         # Extract features and labels
-    X = data.iloc[:, 1:-1]  # exclude 'Sample' and 'Subgroup'
+    X = data.iloc[:, 1:-1].copy()  # exclude 'Sample' and 'Subgroup'
+    X = X.apply(pd.to_numeric, errors='coerce')  # Convert everything to numeric
     y = data['Subgroup']
 
     # Encode target labels to integers
@@ -90,9 +91,27 @@ def nonlinear_feature_selection(data, k, alpha, results_dir='../results/feature_
     y_encoded = le.fit_transform(y)
 
     # Train XGBoost classifier
-    model = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=42, alpha=alpha)
+    model = XGBClassifier(eval_metric='mlogloss', random_state=42, alpha=alpha)
     model.fit(X, y_encoded)
 
+    importances = model.feature_importances_
+    feature_names = X.columns
+
+    importance_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Importance': importances
+    })
+
+    nonzero_importance_df = importance_df[importance_df['Importance'] > 0].sort_values(by='Importance', ascending=False)
+
+    nonzero_importance_df.to_csv(os.path.join(results_dir, f"xgb_selected_features_fold_{fold_num}.csv"), index=False)
+    selected_data = data[['Sample', 'Subgroup'] + list(nonzero_importance_df['Feature'])]
+    selected_data.to_csv(os.path.join(results_dir, f"xgb_selected_data_fold_{fold_num}.csv"), index=False)
+
+    return selected_data, nonzero_importance_df
+
+
+    ''' # Optional: pick top k features based on feature importance
     # Get feature importances
     importances = model.feature_importances_
     feature_names = X.columns
@@ -113,8 +132,9 @@ def nonlinear_feature_selection(data, k, alpha, results_dir='../results/feature_
     selected_data.to_csv(os.path.join(results_dir, f"xgb_selected_data_fold_{fold_num}.csv"), index=False)
 
     return selected_data, top_features
+    '''
 
-def linear_feature_selection(data, k, alpha, results_dir='../results/feature_selection', fold_num = 0):
+def linear_feature_selection(data, alpha, results_dir='../results/feature_selection', fold_num = 0):
 # the fold number is used in the file names so the files do not get overwritten! Pass it to the function!
     '''
     Feature selection using logistic regression feature importance (linear) with L1 regularization.
@@ -142,13 +162,33 @@ def linear_feature_selection(data, k, alpha, results_dir='../results/feature_sel
     model = LogisticRegression(
         penalty='l1',
         solver='saga',
-        multi_class='multinomial',
         max_iter=10000,
         C=1/alpha,
         random_state=42
     )
     model.fit(X, y_encoded)
 
+    coef_matrix = model.coef_
+    feature_names = np.array(X.columns)
+
+    # Get absolute max coefficient across classes
+    importances = np.max(np.abs(coef_matrix), axis=0)
+    nonzero_mask = importances > 0
+
+    selected_features = feature_names[nonzero_mask]
+    importance_df = pd.DataFrame({
+        'Feature': selected_features,
+        'Importance': importances[nonzero_mask]
+    }).sort_values(by='Importance', ascending=False)
+
+    importance_df.to_csv(os.path.join(results_dir, f"logreg_selected_features_fold_{fold_num}.csv"), index=False)
+    selected_data = data[['Sample', 'Subgroup'] + list(selected_features)]
+    selected_data.to_csv(os.path.join(results_dir, f"logreg_selected_data_fold_{fold_num}.csv"), index=False)
+
+    return selected_data, importance_df
+
+
+    ''' optional: pick top k features
     feature_names = np.array(X.columns)
     coef_matrix = np.abs(model.coef_)  # shape: (n_classes, n_features)
 
@@ -179,6 +219,7 @@ def linear_feature_selection(data, k, alpha, results_dir='../results/feature_sel
     selected_data.to_csv(os.path.join(results_dir, f"logreg_selected_data_fold_{fold_num}.csv"), index=False)
 
     return selected_data, importance_df
+    '''
 
 def remove_highly_correlated_features(selected_data, selected_df, model_selection, l, results_dir='../results/feature_selection', fold_num = 0): # l is the correlation threshold that is treated as a hyperparameter 
     '''

@@ -4,8 +4,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # open data 
-train = pd.read_csv('./data/Train_call.txt', delimiter='\t')
-labels = pd.read_csv('./data/Train_clinical.txt', delimiter='\t')
+train = pd.read_csv('../data/Train_call.txt', delimiter='\t')
+labels = pd.read_csv('../data/Train_clinical.txt', delimiter='\t')
 #print(train.shape)
 #print(data.head())
 #print(labels.head())
@@ -19,14 +19,15 @@ train = train.rename(columns={"index": "Sample"})
 
 # Merge data and labels
 data = train.merge(labels, on="Sample", how="left")
-#print(data.head())
-#print(data.shape)
+print(data.head())
+print(data.shape)
 
+'''
 # Check for missing values
 missing_values = data.isnull().sum()
 print("Missing values in each column:")
 print(missing_values[missing_values > 0])
-
+'''
 '''
 ## Class distribution ##
 class_distribution = data["Subgroup"].value_counts()
@@ -89,14 +90,14 @@ plt.xticks(rotation=0)
 plt.legend(title="CNV Type", labels=["Loss (-1)", "Normal (0)", "Gain (1)", "Amplification (2)"])
 plt.show()
 '''
-
+'''
 ## Can clusters be identified? ##
 # meancenter data
 X = data.iloc[:, 1:-1]
 y = data["Subgroup"]
 samples = data["Sample"]
 X_centered = X - X.mean()
-
+'''
 '''
 # PCA with points colored by Subgroup
 from sklearn.decomposition import PCA
