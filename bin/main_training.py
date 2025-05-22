@@ -19,6 +19,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import label_binarize
 from sklearn.metrics import make_scorer, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve, auc
+from sklearn.inspection import permutation_importance 
 from joblib import dump
 from src.inner_loop import inner_loop
 from src.feature_selection import stat_test_feature_selection, remove_highly_correlated_features, nonlinear_feature_selection, linear_feature_selection
@@ -106,7 +107,7 @@ def outer_loop(data_path, model_selection, results_dir, n_outer_folds=5):
             max_depth=best_params['max_depth'],
             max_features=best_params['max_features'],
             random_state=42,
-            class_weight={'HER2+': 1, 'HR+': 2, 'Triple Neg': 2} # to add more importance to the other 2 classes 
+            # class_weight={'HER2+': 1, 'HR+': 2, 'Triple Neg': 2} # to add more importance to the other 2 classes 
         )
         X_trainval = data_cleaned[selected_features]
         y_trainval = data_cleaned['Subgroup']
@@ -196,6 +197,19 @@ def outer_loop(data_path, model_selection, results_dir, n_outer_folds=5):
         importance_path = os.path.join(results_dir, model_selection, f"outer_results/feature_importance_fold{outer_fold}.csv")
         feature_importance_df.to_csv(importance_path, index=False)
 
+        # Permutation importance (MDA)
+        result = permutation_importance(model, X_trainval, y_trainval, n_repeats=10, random_state=42, n_jobs=-1)
+        # Store results
+        feature_importance_MDA_df = pd.DataFrame({
+            'Feature': selected_features,
+            'Importance': result.importances_mean,
+            'Importance_std': result.importances_std,
+            'Fold': outer_fold
+        })
+        # Save per fold
+        importance_path = os.path.join(results_dir, model_selection, f"outer_results/feature_importance_MDA_fold{outer_fold}.csv")
+        feature_importance_MDA_df.to_csv(importance_path, index=False)
+
     # Outer loop for aggregation of results  
     # Plot aggregated confusion matrix
     plt.figure(figsize=(8, 6))
@@ -281,7 +295,7 @@ def outer_loop(data_path, model_selection, results_dir, n_outer_folds=5):
     inner_metrics_path = os.path.join(results_dir, model_selection, "inner_results", "inner_results.csv")
     df = pd.read_csv(inner_metrics_path)
     # Create param_id and aggregate
-    df['param_id'] = df[['n_estimators', 'max_depth', 'max_features', 'k', 'l']].astype(str).agg('_'.join, axis=1)
+    df['param_id'] = df[['n_estimators', 'max_depth', 'alpha']].astype(str).agg('_'.join, axis=1)
     metrics = ['accuracy', 'train_accuracy']
     agg = df.groupby('param_id')[metrics].agg(['mean', 'std']).reset_index()
     agg.columns = ['param_id'] + [f"{m}_{stat}" for m, stat in agg.columns.tolist()[1:]]

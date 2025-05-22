@@ -246,42 +246,25 @@ def remove_highly_correlated_features(selected_data, selected_df, model_selectio
                 # Get feature names
                 f1 = corr_matrix.index[i]
                 f2 = corr_matrix.columns[j]
-                if model_selection == 'stat_test':
-                    # Get p-values from selected_df
-                    p1_val = selected_df[selected_df['Feature'] == f1]['p-value'].values
-                    p2_val = selected_df[selected_df['Feature'] == f2]['p-value'].values
-                    if len(p1_val) == 0 or len(p2_val) == 0:
-                        continue  # skip if p-value missing for any feature
-                    p1 = p1_val[0]
-                    p2 = p2_val[0]
-                    # Drop the one with higher p-value
-                    if p1 > p2:
-                        features_to_drop.add(f1)
-                        drop_log.append((f1, f2, corr_val, p1, p2))
-                    else:
-                        features_to_drop.add(f2)
-                        drop_log.append((f2, f1, corr_val, p2, p1))
-                elif model_selection in ['linear_regularization', 'nonlinear_regularization']:
-                    # Get coefficients from selected_df
-                    c1_val = selected_df[selected_df['Feature'] == f1]['Importance'].values
-                    c2_val = selected_df[selected_df['Feature'] == f2]['Importance'].values
-                    if len(c1_val) == 0 or len(c2_val) == 0:
-                        continue  # skip if coefficients missing for any feature
-                    c1 = abs(c1_val[0])
-                    c2 = abs(c2_val[0])
-                    # Drop the one with higher p-value
-                    if c1 < c2:
-                        features_to_drop.add(f1)
-                        drop_log.append((f1, f2, corr_val, c1, c2))
-                    else:
-                        features_to_drop.add(f2)
-                        drop_log.append((f2, f1, corr_val, c2, c1))
+                if f1 in features_to_drop or f2 in features_to_drop:
+                    continue # skip if already marked for dropping
+                # Get p-values from selected_df
+                p1_val = selected_df[selected_df['Feature'] == f1]['p-value'].values
+                p2_val = selected_df[selected_df['Feature'] == f2]['p-value'].values
+                if len(p1_val) == 0 or len(p2_val) == 0:
+                    continue  # skip if p-value missing for any feature
+                p1 = p1_val[0]
+                p2 = p2_val[0]
+                # Drop the one with higher p-value
+                if p1 > p2:
+                    features_to_drop.add(f1)
+                    drop_log.append((f1, f2, corr_val, p1, p2))
+                else:
+                    features_to_drop.add(f2)
+                    drop_log.append((f2, f1, corr_val, p2, p1))
 
     # Save the dropped features and correlation
-    if model_selection == 'stat_test':
-        drop_df = pd.DataFrame(drop_log, columns=['Feature_to_drop', 'Retained_feature', 'Correlation', 'p_to_drop', 'p_retained'])
-    elif model_selection in ['linear_regularization', 'nonlinear_regularization']:
-        drop_df = pd.DataFrame(drop_log, columns=['Feature_to_drop', 'Retained_feature', 'Correlation', 'c_to_drop', 'c_retained'])
+    drop_df = pd.DataFrame(drop_log, columns=['Feature_to_drop', 'Retained_feature', 'Correlation', 'p_to_drop', 'p_retained'])
     drop_df.to_csv(os.path.join(results_dir, f"correlated_features_dropped_fold_{fold_num}.csv"), index=False)
     
     # Drop features from selected features 

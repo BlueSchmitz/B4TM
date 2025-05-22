@@ -34,12 +34,12 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
     param_grid = {
         # RF hyperparameters
         'n_estimators': [50, 100],
-        'max_depth': [None, 10],
+        'max_depth': [6, 10],
         'max_features': ['sqrt'], 
         # feature selection parameters
-        'k': [100, 200, 300] if model_selection == 'stat_test' else [None], # top k features
-        'l': [0.7, 0.8, 0.9] if model_selection == 'stat_test' else [None], # correlation threshold 
-        'alpha': [0.1, 1, 10] if model_selection in ['linear_regularization', 'nonlinear_regularization'] else [None] # regularization parameter for Lasso
+        'k': [50, 75, 100] if model_selection == 'stat_test' else [None], # top k features
+        'l': [0.6, 0.7, 0.8] if model_selection == 'stat_test' else [None], # correlation threshold 
+        'alpha': [4, 7, 10] if model_selection in ['linear_regularization', 'nonlinear_regularization'] else [None] # regularization parameter for Lasso
     }
 
     # data
@@ -147,6 +147,7 @@ def inner_loop(data, model_selection, results_dir = '../results/inner_results', 
                 'max_features': params['max_features'],
                 'k': params['k'],
                 'l': params['l'],
+                'alpha': params['alpha'],
                 'accuracy': accuracy_score(y_val, val_preds),
                 'f1_weighted': f1_score(y_val, val_preds, average='weighted'),
                 'roc_auc_ovr': roc_auc_score(y_val, val_probs, multi_class='ovr', average='weighted'),

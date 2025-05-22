@@ -17,10 +17,12 @@ python3 run_model.py -i unlabelled_sample.txt -m model.pkl -o output.txt
 
 import argparse
 import sys
+import csv
 # Start your coding
 
 # import the library you need here
-
+import pickle
+import pandas as pd
 # End your coding
 
 
@@ -52,9 +54,30 @@ def main():
 
     # suggested steps
     # Step 1: load the model from the model file
-    # Step 2: apply the model to the input file to do the prediction
-    # Step 3: write the prediction into the desinated output file
+    with open(args.model_file, 'rb') as f:
+        model = pickle.load(f)
 
+    # Step 2: apply the model to the input file to do the prediction
+    input_data = pd.read_csv(args.input_file, delimiter='\t')
+    input_data["Region"] = input_data["Chromosome"].astype(str) + ":" + input_data["Start"].astype(str) + "-" + input_data["End"].astype(str)
+    input_data = input_data.drop(columns=["Chromosome", "Start", "End", "Nclone"])
+    input_data = input_data.set_index("Region").T.reset_index()
+    input_data = input_data.rename(columns={"index": "Sample"})
+    final_features_path = "./results/final_model/feature_names_final_model.csv"
+    final_features_df = pd.read_csv(final_features_path)
+    final_features = final_features_df['Feature'].tolist()
+    X = input_data[final_features]
+    predictions = model.predict(X)
+
+    # Step 3: write the prediction into the desinated output file
+    output_df = pd.DataFrame({
+        'Sample': input_data["Sample"],
+        'Subgroup': predictions
+    })
+
+    output_df.to_csv(args.output_file, sep='\t', index=False, quoting=csv.QUOTE_ALL)
+
+    print(f"Predictions saved to {args.output_file}")
     # End your coding
 
 
